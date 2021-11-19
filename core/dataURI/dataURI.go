@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"time"
 	"strings"
+	"io/ioutil"
 
 	"github.com/open-horizon/edge-sync-service/common"
 	"github.com/open-horizon/edge-utilities/logger"
@@ -26,6 +28,7 @@ func AppendData(uri string, dataReader io.Reader, dataLength uint32, offset int6
 	if trace.IsLogging(logger.TRACE) {
 		trace.Trace("Storing data chunk at %s", uri)
 	}
+	trace.Info("Storing data chunk at %s", uri)
 
 	dataURI, err := url.Parse(uri)
 	if err != nil || !strings.EqualFold(dataURI.Scheme, "file") {
@@ -43,6 +46,7 @@ func AppendData(uri string, dataReader io.Reader, dataLength uint32, offset int6
 	}
 
 	written, err := io.Copy(file, dataReader)
+	trace.Info("Append data - written - %d, dataLength - %d", written, dataLength)
 	if err != nil && err != io.EOF {
 		return &common.IOError{Message: "Failed to write to file. Error: " + err.Error()}
 	}
@@ -63,29 +67,82 @@ func StoreData(uri string, dataReader io.Reader, dataLength uint32) (int64, comm
 	if trace.IsLogging(logger.TRACE) {
 		trace.Trace("Storing data at %s", uri)
 	}
+	trace.Info("Storing data at %s", uri)
 	dataURI, err := url.Parse(uri)
 	if err != nil || !strings.EqualFold(dataURI.Scheme, "file") {
 		return 0, &Error{"Invalid data URI"}
 	}
 
 	filePath := dataURI.Path + ".tmp"
-	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0600)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		return 0, common.CreateError(err, fmt.Sprintf("Failed to open file %s to write data. Error: ", dataURI.Path))
 	}
 	defer file.Close()
 
-	if _, err = file.Seek(0, io.SeekStart); err != nil {
-		return 0, &common.IOError{Message: "Failed to seek to the start of a file. Error: " + err.Error()}
+	fi,err := file.Stat()
+	if err != nil {
+		return 0, common.CreateError(err, fmt.Sprintf("Failed to get file Stat on file %s. Error: ", dataURI.Path))
 	}
 
+	var currentWritten int64 = 0
+	if fi != nil {
+		currentWritten = fi.Size()
+	}
+	trace.Info("Current file size is %d bytes", currentWritten)
+
+	start_time := time.Now().Unix()
+	var hasRead int64 = 0
+	if currentWritten == 0 {
+		if _, err = file.Seek(0, io.SeekStart); err != nil {
+			return 0, &common.IOError{Message: "Failed to seek to the start of a file. Error: " + err.Error()}
+		}
+	} else {
+
+		//var b bytes.Buffer
+		//theWriter := bufio.NewWriter(&b)
+
+		//var readLimit int64 = 1024 * 1024 * 32
+		//if currentWritten <  readLimit {
+		//	readLimit = currentWritten
+		//}
+
+		doOnce  := true
+
+		for hasRead < currentWritten {
+			if written, err := io.CopyN(ioutil.Discard, dataReader, currentWritten); err != nil {
+				return 0, &common.IOError{Message: "Failed to write to file. Error: " + err.Error()}
+			} else {
+				hasRead += written
+				if doOnce {
+					trace.Info("Gotten read bytes from CopyN of %d", written)
+					doOnce = false
+				}
+			}
+
+			//b.Reset()
+
+			//if (hasRead + readLimit) > currentWritten {
+			//	readLimit = currentWritten - hasRead
+			//}
+		}
+	}
+
+	stop_time := time.Now().Unix() 
+	trace.Info("Store data - Read resume total of %d bytes in %d seconds", hasRead, stop_time - start_time)
+
+	trace.Info("Now getting into writing to the file after siphoning off %d bytes", hasRead)
 	written, err := io.Copy(file, dataReader)
+	written += hasRead
+	trace.Info("Store data - written - %d, dataLength - %d", written, dataLength)
 	if err != nil && err != io.EOF {
+	        trace.Info("error - %v", err)
 		return 0, &common.IOError{Message: "Failed to write to file. Error: " + err.Error()}
 	}
 	if written != int64(dataLength) && dataLength != 0 {
 		return 0, &common.IOError{Message: "Failed to write all the data to file."}
 	}
+	trace.Info("Store data ... Must be done with write")
 	if err := os.Rename(filePath, dataURI.Path); err != nil {
 		return 0, &common.IOError{Message: "Failed to rename data file. Error: " + err.Error()}
 	}
@@ -97,6 +154,7 @@ func StoreTempData(uri string, dataReader io.Reader, dataLength uint32) (int64, 
 	if trace.IsLogging(logger.TRACE) {
 		trace.Trace("Storing data at %s", uri)
 	}
+	trace.Info("Store Temp data at %s", uri)
 	dataURI, err := url.Parse(uri)
 	if err != nil || !strings.EqualFold(dataURI.Scheme, "file") {
 		return 0, &Error{"Invalid data URI"}
@@ -114,12 +172,15 @@ func StoreTempData(uri string, dataReader io.Reader, dataLength uint32) (int64, 
 	}
 
 	written, err := io.Copy(file, dataReader)
+	trace.Info("Store temp data - written - %d, dataLength - %d", written, dataLength)
 	if err != nil && err != io.EOF {
+	        trace.Info("error - %v", err)
 		return 0, &common.IOError{Message: "Failed to write to file. Error: " + err.Error()}
 	}
 	if written != int64(dataLength) && dataLength != 0 {
 		return 0, &common.IOError{Message: "Failed to write all the data to file."}
 	}
+	trace.Info("Store temp data ... Must be done with write")
 	return written, nil
 }
 
