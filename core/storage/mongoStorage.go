@@ -1167,8 +1167,16 @@ func (store *MongoStorage) AppendObjectData(orgID string, objectType string, obj
 	} else {
 		fh := store.getFileHandle(id)
 		if fh == nil {
-			return isLastChunk, &Error{fmt.Sprintf("Failed to append the data at offset %d, the file %s doesn't exist.", offset, id)}
+			fh2, err := store.createFile(id)
+			if err != nil {
+				return isLastChunk, err
+			} else { 
+				fh = fh2
+			} 
+			fmt.Println(fmt.Sprintf("Doug.. Made a new file handle at offset %d\n", fh2.offset))
 		}
+		// Some chunks might have been handled by other CSS's so adjust the offset of this fileHandle for this chunk
+		fh.offset = offset
 		fileHandle = fh
 	}
 
